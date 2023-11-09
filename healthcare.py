@@ -1,4 +1,4 @@
-import pypyodbc
+import pyodbc
 from fastapi import FastAPI, HTTPException
 import json
 from pydantic import BaseModel
@@ -7,10 +7,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.tree import DecisionTreeRegressor
 connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=Mikdar123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
-
 def get_conn():
    # This connection option is defined by microsoft in msodbcsql.h
-    conn = pypyodbc.connect(connection_string)
+    conn = pyodbc.connect(connection_string)
     return conn
 
 
@@ -55,9 +54,9 @@ async def read_all_hasil():
 	conn = get_conn()
 	cursor = conn.cursor()
 	cursor.execute('''SELECT * FROM hasilTest''')
-	# for row in cursor.fetchall():
-	# 	rows.append(f"{row.testID}, {row.patientID}, {row.dokterID}, {row.hasilUji}, {row.tanggalUji}")
-	return cursor.fetchall()
+	for row in cursor.fetchall():
+		rows.append(f"{row.testID}, {row.patientID}, {row.dokterID}, {row.hasilUji}, {row.tanggalUji}")
+	return rows
 @app.post('/predict')
 async def check_disease(item: Item):
 	i = 0
