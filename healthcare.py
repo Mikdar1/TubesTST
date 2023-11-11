@@ -1,6 +1,12 @@
 import pyodbc
+from typing import Annotated
+from fastapi import Depends
 from fastapi import FastAPI, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import json
+from datetime import datetime,timedelta
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from pydantic import BaseModel
 import numpy as np
 import pandas as pd
@@ -12,10 +18,20 @@ def get_conn():
     conn = pyodbc.connect(connection_string)
     return conn
 
+admin_db = {
+    "admin": {
+        "username": "ghaylan",
+        "patientID": "12345678",
+        "hashed_password": "$2b$12$CsGXBZythElusDMdQgcw7ergEA5uYudY7Px5K533.Ople5JlJenAm",
+        "role": 'admin',
+    }
+}
+
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 class Item(BaseModel):
-	idPasien: int
-	idDokter:int
 	bloodPressure: int
 	weight: int
 	height: int
@@ -24,41 +40,303 @@ class Hasil(BaseModel):
 	def __init__(self, idTest,idPasien,idDokter,hasilUji) :
 		self.idTest = idTest
 		self.idPasien = idPasien
-		self.idDokter = idDokter
 		self.hasilUji = hasilUji
-       
-	
+class User:
+	def __init__(self, name, password_hashed, patientId, role):
+		self.name = name
+		self.password_hashed = password_hashed
+		self.patientId = patientId
+		self.role = role
 
 
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated=["auto"])
 
-json_filename="pasien.json"
 
-with open('hasilTest.json',"r") as read_file:
-	test = json.load(read_file)
-with open(json_filename,"r") as read_file:
-	data = json.load(read_file)
 app = FastAPI()
+oauth_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
-dataset1 = pd.read_csv('MOCK_DATA (1).csv')
-X=dataset1[['TekananDarah', 'TinggiBadan', 'BeratBadan']]
-y=dataset1['Penyakit'] 
-X=X.values
-y=y.values
-svr = DecisionTreeRegressor()
-svr.fit(X,y)
-app = FastAPI()
+def verify_password(plain_password, hashed_password):
+	return pwd_context.verify(plain_password, hashed_password)
 
-@app.get('/all')
-async def read_all_hasil():
-	rows=[]
+def get_password_hashed(password):
+	return pwd_context.hash(password)
+
+def check_user(username:str):
+	if username == "ghaylan":
+		return True
 	conn = get_conn()
 	cursor = conn.cursor()
-	cursor.execute('''SELECT * FROM hasilTest''')
+	cursor.execute("SELECT username as name FROM akun where username='%s' ;" %(username))
 	for row in cursor.fetchall():
-		rows.append(f"{row.testID}, {row.patientID}, {row.dokterID}, {row.hasilUji}, {row.tanggalUji}")
-	return rows
+		if row.name == username or username == 'ghaylan':
+			return True
+	return False
+
+async def get_curr_user(token : str = Depends(oauth_scheme)):
+	payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
+	if payload.get('role') == 'admin':
+		try:
+			admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"] )
+			return admin
+		except:
+			raise HTTPException(status_code=401, detail="Invalid Username or Password")
+	elif payload.get('role') == 'pasien':
+		try:
+			name=payload.get('username')
+			nama=[]
+			passw=[]
+			id=[]
+			conn = get_conn()
+			cursor = conn.cursor()
+			cursor.execute("SELECT username FROM akun where username='%s' ;" %(name))
+			for row in cursor.fetchall():
+				nama.append(f"{row.username}")
+			cursor.execute("SELECT pass as pword FROM akun where username='%s' ;" %(name))
+			for row in cursor.fetchall():
+				passw.append(f"{row.pword}")
+			cursor.execute("SELECT pasienID FROM akun where username='%s' ;" %(name))
+			for row in cursor.fetchall():
+				id.append(f"{row.pasienID}")
+				user = User(name = nama[0], password_hashed=passw[0], patientId=id[0],role='pasien')
+				nama=[]
+				passw=[]
+				id=[]
+				return user
+		except:
+			raise HTTPException(status_code=401, detail="Invalid Username or Password")
+		
+
+def authenticate_user(username:str,password:str):
+	hashed_password=get_password_hashed(password)
+	username_correct=check_user(username)
+	if username_correct:
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		if username == 'ghaylan':
+			if not verify_password(password, admin_db["admin"]["hashed_password"]):
+				raise HTTPException(status_code=401, detail='invalid password')
+			else:
+				admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"] )
+				return admin
+		cursor.execute("SELECT pass as pword FROM akun where username = '%s'" %(username))
+		for row in cursor.fetchall():
+			rows.append(f"{row.pword}")
+		if not verify_password(password, rows[0]):
+			raise HTTPException(status_code=401, detail='invalid password')
+		else:
+			rows=[]
+			idpasien=[]
+			cursor.execute("SELECT pasienID FROM akun where username = '%s'" %(username))
+			for row in cursor.fetchall():
+				idpasien.append(f"{row.pasienID}")
+			user = User(name=username, password_hashed=hashed_password, patientId=idpasien[0],role="pasien")
+			idpasien=[]
+			return user 
+	else:
+		raise HTTPException(status_code=402, detail="invalid username")
+	
+
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+	user = authenticate_user(form_data.username,form_data.password)
+	token = jwt.encode({'username':user.name, 'id' : user.patientId, 'role':user.role}, SECRET_KEY)
+	return {"access_token": token, "token_type":"bearer"}
+
+@app.post("/daftar")
+async def pasien_daftar(nama : str, riwayatPenyakit : str):
+	conn = get_conn()
+	rows=[]
+	cursor = conn.cursor()
+	cursor.execute("SELECT pasienID FROM pasien ORDER BY pasienID DESC")
+	for row in cursor.fetchall():
+		rows.append(f"{row.pasienID+1}")
+	cursor.execute('''INSERT INTO pasien VALUES ('%s','%s','%s')''' %(rows[0],nama,riwayatPenyakit))
+	conn.commit()
+	return "pasien berhasil didaftarkan dengan id = %s" %(rows[0])
+
+@app.post("/users")
+async def create_user(username: str, password: str, patientId):
+	if not check_user(username):
+		password_hashed = get_password_hashed(password)
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute('''INSERT INTO akun VALUES ('%s','%s','%s')''' %(username, password_hashed, patientId))
+		conn.commit()
+		return "user created successfully"
+	else:
+		raise HTTPException(status_code=403, detail="username sudah dipakai")
+
+@app.get("/users/profile")
+async def profile(user: User = Depends(get_curr_user)):
+	rows=[]
+	temp=[]
+	conn = get_conn()
+	cursor = conn.cursor()
+	cursor.execute("SELECT * FROM pasien where pasienID = '%s'" %(user.patientId))
+	for row in cursor.fetchall():
+		rows.append(f"{row.pasienID}, {row.pasienNama}, {row.riwayatPenyakit}")
+	temp=rows
+	rows=[]
+	return temp
+
+
+@app.get('/all/hasiluji')
+async def read_all_hasilUji(user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT * FROM hasilUji")
+		for row in cursor.fetchall():
+			rows.append(f"{row.ujiID}, {row.pasienID}, {row.hasilUji}")
+		return rows
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+	
+@app.get('/all/akun')
+async def read_all_akun(user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT username, pass as password, pasienID FROM akun")
+		for row in cursor.fetchall():
+			rows.append(f"{row.username}, {row.password}, {row.pasienID}")
+		return rows
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+	
+@app.get('/all/pasien')
+async def read_all_pasien(user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT * FROM pasien")
+		for row in cursor.fetchall():
+			rows.append(f"{row.pasienID}, {row.pasienNama}, {row.riwayatPenyakit}")
+		return rows
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
+@app.delete('/pasien/{pasienID}')
+async def delete_pasien_data(pasienID: int,user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT count(*) as hasil FROM pasien where pasienID = %s" %(pasienID))
+		for row in cursor.fetchall():
+			rows.append(f"{row.hasil}")
+		if rows[0]=='1':
+			akun=[]
+			hasil=[]
+			cursor.execute("SELECT count(*) as hasil FROM akun where pasienID = %s" %(pasienID))
+			for row in cursor.fetchall():
+				akun.append(f"{row.hasil}")
+			cursor.execute("SELECT count(*) as hasil hasilUji akun where pasienID = %s" %(pasienID))
+			for row in cursor.fetchall():
+				hasil.append(f"{row.hasil}")
+			if akun[0] == '1':
+				cursor.execute("DELETE FROM akun WHERE pasienID = '%s'" %(pasienID))
+				conn.commit()
+			if hasil[0]!='0':
+				cursor.execute("DELETE FROM hasilUji WHERE pasienID = %s" %(pasienID))
+				conn.commit()
+			cursor.execute("DELETE FROM pasien WHERE pasienID = %s" %(pasienID))
+			conn.commit()
+			return "data pasien dengan id %s berhasil dihapus" %(pasienID)
+		else:
+			return "tidak ada pasien dengan id %s" %(pasienID)
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
+@app.delete('/hasilUji/{ujiID}')
+async def delete_data_hasil_uji(ujiID: int,user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT count(*) as hasil FROM hasilUji where ujiID = %s" %(ujiID))
+		for row in cursor.fetchall():
+			rows.append(f"{row.hasil}")
+		if rows[0]!='0':
+			cursor.execute("DELETE FROM hasilUji WHERE ujiID = %s" %(ujiID))
+			conn.commit()
+			return "data hasil uji dengan id %s berhasil dihapus" %(ujiID)
+		else:
+			return "tidak ada hasil uji dengan id %s" %(ujiID)
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
+@app.delete('/akun/{pasienID}')
+async def delete_akun(pasienID: int,user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT count(*) as hasil FROM akun where pasienID = '%s'" %(pasienID))
+		for row in cursor.fetchall():
+			rows.append(f"{row.hasil}")
+		if rows[0]=='1':
+			hasil=[]
+			if hasil[0]!='0':
+				cursor.execute("DELETE FROM hasilUji WHERE pasienID = %s" %(pasienID))
+				conn.commit()
+			cursor.execute("DELETE FROM akun WHERE pasienID = '%s'" %(pasienID))
+			conn.commit()
+			return "akun dengan pasienID %s berhasil dihapus" %(pasienID)
+		else:
+			return "tidak ada akun dengan pasienID %s" %(pasienID)
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
+@app.put('/riwayat/{pasienID}')
+async def update_riwayat_penyakit(riwayatPenyakit:str,pasienID: int,user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT count(*) as hasil FROM pasien where pasienID = '%s'" %(pasienID))
+		for row in cursor.fetchall():
+			rows.append(f"{row.hasil}")
+		if rows[0]=='1':
+			cursor.execute("UPDATE pasien SET riwayatPenyakit = '%s' WHERE pasienID = '%s'" %(riwayatPenyakit,pasienID))
+			conn.commit()
+			return "riwayat penyakit akun dengan pasienID %s berhasil diubah" %(pasienID)
+		else:
+			return "tidak ada akun dengan pasienID %s" %(pasienID)
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+	
+@app.put('/nama/{pasienID}')
+async def update_nama_pasien(nama:str,pasienID: int,user: User = Depends(get_curr_user)):
+	if user.role == 'admin':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT count(*) as hasil FROM pasien where pasienID = '%s'" %(pasienID))
+		for row in cursor.fetchall():
+			rows.append(f"{row.hasil}")
+		if rows[0]=='1':
+			cursor.execute("UPDATE pasien SET pasienNama = '%s' WHERE pasienID = '%s'" %(nama,pasienID))
+			conn.commit()
+			return "nama pasien akun dengan pasienID %s berhasil diubah" %(pasienID)
+		else:
+			return "tidak ada akun dengan pasienID %s" %(pasienID)
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
 @app.post('/predict')
-async def check_disease(item: Item):
+async def check_disease(item: Item, user: User = Depends(get_curr_user)):
+	dataset1 = pd.read_csv('MOCK_DATA (1).csv')
+	X=dataset1[['TekananDarah', 'TinggiBadan', 'BeratBadan']]
+	y=dataset1['Penyakit'] 
+	X=X.values
+	y=y.values
+	svr = DecisionTreeRegressor()
+	svr.fit(X,y)
 	i = 0
 	item_dict = item.dict()
 	y_pred=svr.predict([[item_dict.get("bloodPressure"),item_dict.get("weight"),item_dict.get("height")]])
@@ -70,30 +348,14 @@ async def check_disease(item: Item):
 		penyakit = "darah rendah"
 	else:
 		penyakit= "darah tinggi"
-		
-		
-	item_found = False
-	for pasien in data['pasien']:
-		if pasien['idPasien'] == item_dict['idPasien']:
-			for jumlah in test["hasil"]:
-				i=i+1
-			i=i+1
-			input= {
-                "idTest": i,
-                "idPasien": item_dict.get("idPasien"),
-                "idDokter": item_dict.get("idDokter"),
-				"hasilUji":penyakit  # Mengubah hasil prediksi menjadi string
-            }
-			test["hasil"].append(input)
-			with open('hasilTest.json',"w") as write_file:
-				json.dump(test, write_file)
-			return penyakit
-    
-	raise HTTPException(
-		status_code=404, detail=f'id pasien tidka ditemukan'
-	)
+	conn = get_conn()
+	cursor = conn.cursor()
+	rows=[]
+	cursor.execute('''SELECT ujiID FROM hasilUji ORDER BY ujiID DESC''')
+	for row in cursor.fetchall():
+		rows.append(f"{row.ujiID+1}")
+	cursor.execute('''INSERT INTO hasilUji (ujiID,pasienID,hasilUji) VALUES ('%s','%s','%s')''' %(rows[0],user.patientId,penyakit))
+	conn.commit()
+	return penyakit
+
 	
-
-
-
-
