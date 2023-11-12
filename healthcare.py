@@ -246,7 +246,7 @@ async def delete_pasien_data(pasienID: int,user: User = Depends(get_curr_user)):
 			cursor.execute("SELECT count(*) as hasil FROM akun where pasienID = %s" %(pasienID))
 			for row in cursor.fetchall():
 				akun.append(f"{row.hasil}")
-			cursor.execute("SELECT count(*) as hasil hasilUji akun where pasienID = %s" %(pasienID))
+			cursor.execute("SELECT count(*) as hasil FROM hasilUji akun where pasienID = %s" %(pasienID))
 			for row in cursor.fetchall():
 				hasil.append(f"{row.hasil}")
 			if akun[0] == '1':
@@ -292,6 +292,9 @@ async def delete_akun(pasienID: int,user: User = Depends(get_curr_user)):
 			rows.append(f"{row.hasil}")
 		if rows[0]=='1':
 			hasil=[]
+			cursor.execute("SELECT count(*) as hasil FROM hasilUji akun where pasienID = %s" %(pasienID))
+			for row in cursor.fetchall():
+				hasil.append(f"{row.hasil}")
 			if hasil[0]!='0':
 				cursor.execute("DELETE FROM hasilUji WHERE pasienID = %s" %(pasienID))
 				conn.commit()
