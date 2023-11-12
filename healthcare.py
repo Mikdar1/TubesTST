@@ -3,7 +3,6 @@ from typing import Annotated
 from fastapi import Depends
 from fastapi import FastAPI, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-import json
 from datetime import datetime,timedelta
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -29,7 +28,6 @@ admin_db = {
 
 SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 class Item(BaseModel):
 	bloodPressure: int
@@ -193,7 +191,20 @@ async def read_all_hasilUji(user: User = Depends(get_curr_user)):
 		return rows
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
-	
+
+@app.get('/hasilUji')
+async def read_all_hasilUji_pasien(user: User = Depends(get_curr_user)):
+	if user.role == 'pasien':
+		rows=[]
+		conn = get_conn()
+		cursor = conn.cursor()
+		cursor.execute("SELECT * FROM hasilUji where pasienID = %s"%(user.patientId))
+		for row in cursor.fetchall():
+			rows.append(f"{row.ujiID}, {row.pasienID}, {row.hasilUji}")
+		return rows
+	else:
+		raise HTTPException(status_code=405, detail="unauthorized")
+
 @app.get('/all/akun')
 async def read_all_akun(user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
