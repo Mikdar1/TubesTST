@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.tree import DecisionTreeRegressor
+import json
 connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=Mikdar123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
 def get_conn():
    # This connection option is defined by microsoft in msodbcsql.h
@@ -134,14 +135,13 @@ def authenticate_user(username:str,password:str):
 	else:
 		raise HTTPException(status_code=402, detail="invalid username")
 	
-
-@app.post("/token")
+@app.post("/token", tags=['generate token'])
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 	user = authenticate_user(form_data.username,form_data.password)
 	token = jwt.encode({'username':user.name, 'id' : user.patientId, 'role':user.role}, SECRET_KEY)
 	return {"access_token": token, "token_type":"bearer"}
 
-@app.post("/daftar")
+@app.post("/daftar", tags=['all can access'])
 async def pasien_daftar(nama : str, riwayatPenyakit : str):
 	conn = get_conn()
 	rows=[]
@@ -153,7 +153,7 @@ async def pasien_daftar(nama : str, riwayatPenyakit : str):
 	conn.commit()
 	return "pasien berhasil didaftarkan dengan id = %s" %(rows[0])
 
-@app.post("/users")
+@app.post("/users", tags=['all can access'])
 async def create_user(username: str, password: str, patientId):
 	if not check_user(username):
 		password_hashed = get_password_hashed(password)
@@ -165,47 +165,48 @@ async def create_user(username: str, password: str, patientId):
 	else:
 		raise HTTPException(status_code=403, detail="username sudah dipakai")
 
-@app.get("/users/profile")
+@app.get("/users/profile", tags =['pasien access'])
 async def profile(user: User = Depends(get_curr_user)):
-	rows=[]
 	temp=[]
 	conn = get_conn()
 	cursor = conn.cursor()
 	cursor.execute("SELECT * FROM pasien where pasienID = '%s'" %(user.patientId))
-	for row in cursor.fetchall():
-		rows.append(f"{row.pasienID}, {row.pasienNama}, {row.riwayatPenyakit}")
-	temp=rows
-	rows=[]
-	return temp
+	temp=cursor.fetchone()
+	return {
+		"ID pasien":temp[0],
+		"Nama pasien":temp[1],
+		"riwayat penyakit":temp[2]
+	}
 
 
-@app.get('/all/hasiluji')
+@app.get('/all/hasiluji', tags =['admin access'])
 async def read_all_hasilUji(user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
 		conn = get_conn()
 		cursor = conn.cursor()
-		cursor.execute("SELECT * FROM hasilUji")
+		cari = cursor.execute("SELECT * FROM hasilUji")
 		for row in cursor.fetchall():
-			rows.append(f"{row.ujiID}, {row.pasienID}, {row.hasilUji}")
+			rows.append({"ujiID":row.ujiID, "pasienID":row.pasienID, "hasil":row.hasilUji})
 		return rows
+	
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.get('/hasilUji')
-async def read_all_hasilUji_pasien(user: User = Depends(get_curr_user)):
+@app.get('/hasilUji', tags=['pasien access'])
+async def read_all_hasil_test_pasien(user: User = Depends(get_curr_user)):
 	if user.role == 'pasien':
 		rows=[]
 		conn = get_conn()
 		cursor = conn.cursor()
 		cursor.execute("SELECT * FROM hasilUji where pasienID = %s"%(user.patientId))
 		for row in cursor.fetchall():
-			rows.append(f"{row.ujiID}, {row.pasienID}, {row.hasilUji}")
+			rows.append({"ujiID":row.ujiID, "pasienID":row.pasienID, "hasil":row.hasilUji})
 		return rows
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.get('/all/akun')
+@app.get('/all/akun', tags=['admin access'])
 async def read_all_akun(user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -213,12 +214,12 @@ async def read_all_akun(user: User = Depends(get_curr_user)):
 		cursor = conn.cursor()
 		cursor.execute("SELECT username, pass as password, pasienID FROM akun")
 		for row in cursor.fetchall():
-			rows.append(f"{row.username}, {row.password}, {row.pasienID}")
+			rows.append({"username":row.username, "password":row.password, "pasienID":row.pasienID})
 		return rows
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 	
-@app.get('/all/pasien')
+@app.get('/all/pasien', tags=['admin access'])
 async def read_all_pasien(user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -226,12 +227,13 @@ async def read_all_pasien(user: User = Depends(get_curr_user)):
 		cursor = conn.cursor()
 		cursor.execute("SELECT * FROM pasien")
 		for row in cursor.fetchall():
-			rows.append(f"{row.pasienID}, {row.pasienNama}, {row.riwayatPenyakit}")
+			rows.append({"pasienID":row.pasienID, "nama pasien":row.pasienNama, "riwayat penyakit":row.riwayatPenyakit})
+			
 		return rows
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.delete('/pasien/{pasienID}')
+@app.delete('/pasien/{pasienID}', tags=['admin access'])
 async def delete_pasien_data(pasienID: int,user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -263,7 +265,7 @@ async def delete_pasien_data(pasienID: int,user: User = Depends(get_curr_user)):
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.delete('/hasilUji/{ujiID}')
+@app.delete('/hasilUji/{ujiID}', tags=['admin access'])
 async def delete_data_hasil_uji(ujiID: int,user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -281,7 +283,7 @@ async def delete_data_hasil_uji(ujiID: int,user: User = Depends(get_curr_user)):
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.delete('/akun/{pasienID}')
+@app.delete('/akun/{pasienID}',tags=['admin access'])
 async def delete_akun(pasienID: int,user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -306,7 +308,7 @@ async def delete_akun(pasienID: int,user: User = Depends(get_curr_user)):
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.put('/riwayat/{pasienID}')
+@app.put('/riwayat/{pasienID}',tags=['admin access'])
 async def update_riwayat_penyakit(riwayatPenyakit:str,pasienID: int,user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -324,7 +326,7 @@ async def update_riwayat_penyakit(riwayatPenyakit:str,pasienID: int,user: User =
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 	
-@app.put('/nama/{pasienID}')
+@app.put('/nama/{pasienID}', tags=['admin access'])
 async def update_nama_pasien(nama:str,pasienID: int,user: User = Depends(get_curr_user)):
 	if user.role == 'admin':
 		rows=[]
@@ -342,7 +344,7 @@ async def update_nama_pasien(nama:str,pasienID: int,user: User = Depends(get_cur
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.post('/predict')
+@app.post('/predict',tags=['pasien access','admin access'])
 async def check_disease(item: Item, user: User = Depends(get_curr_user)):
 	dataset1 = pd.read_csv('MOCK_DATA (1).csv')
 	X=dataset1[['TekananDarah', 'TinggiBadan', 'BeratBadan']]
