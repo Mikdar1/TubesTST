@@ -12,7 +12,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.tree import DecisionTreeRegressor
 import json
-connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=Mikdar123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+import requests
+from requests.auth import HTTPBasicAuth
+from requests_oauthlib import OAuth2Session
+connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
 def get_conn():
    # This connection option is defined by microsoft in msodbcsql.h
     conn = pyodbc.connect(connection_string)
@@ -22,8 +25,9 @@ admin_db = {
     "admin": {
         "username": "ghaylan",
         "patientID": "12345678",
-        "hashed_password": "$2b$12$CsGXBZythElusDMdQgcw7ergEA5uYudY7Px5K533.Ople5JlJenAm",
+        "hashed_password": "$2b$12$InzccdYhjsaJts6wkz0OI.tvz4tJP0XR6VL/e9F0vlrnUh9MAsVsG", #apis
         "role": 'admin',
+		"tokenIntegrasi":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJnaGF5bGFuIiwiaWQiOiI4In0.nmv0imRL9VvkHboO97poBvZoD-dMEMRkLJF48u7nrh8"
     }
 }
 
@@ -41,11 +45,13 @@ class Hasil(BaseModel):
 		self.idPasien = idPasien
 		self.hasilUji = hasilUji
 class User:
-	def __init__(self, name, password_hashed, patientId, role):
+	def __init__(self, name, password_hashed, patientId, role, integrasiToken):
 		self.name = name
 		self.password_hashed = password_hashed
 		self.patientId = patientId
 		self.role = role
+		self.integrasiToken = integrasiToken
+
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated=["auto"])
@@ -71,11 +77,13 @@ def check_user(username:str):
 			return True
 	return False
 
+
+
 async def get_curr_user(token : str = Depends(oauth_scheme)):
 	payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
 	if payload.get('role') == 'admin':
 		try:
-			admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"] )
+			admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"], integrasiToken= admin_db["admin"]["tokenIntegrasi"])
 			return admin
 		except:
 			raise HTTPException(status_code=401, detail="Invalid Username or Password")
@@ -85,18 +93,23 @@ async def get_curr_user(token : str = Depends(oauth_scheme)):
 			nama=[]
 			passw=[]
 			id=[]
+			token=[]
 			conn = get_conn()
 			cursor = conn.cursor()
 			cursor.execute("SELECT username FROM akun where username='%s' ;" %(name))
 			for row in cursor.fetchall():
 				nama.append(f"{row.username}")
+			cursor.execute("SELECT tokenIntegrasi FROM akun where username='%s' ;" %(name))
+			for row in cursor.fetchall():
+				token.append(f"{row.tokenIntegrasi}")
 			cursor.execute("SELECT pass as pword FROM akun where username='%s' ;" %(name))
 			for row in cursor.fetchall():
 				passw.append(f"{row.pword}")
 			cursor.execute("SELECT pasienID FROM akun where username='%s' ;" %(name))
 			for row in cursor.fetchall():
 				id.append(f"{row.pasienID}")
-				user = User(name = nama[0], password_hashed=passw[0], patientId=id[0],role='pasien')
+				
+				user = User(name = nama[0], password_hashed=passw[0], patientId=id[0],role='pasien', integrasiToken=token[0])
 				nama=[]
 				passw=[]
 				id=[]
@@ -112,12 +125,31 @@ def authenticate_user(username:str,password:str):
 		rows=[]
 		conn = get_conn()
 		cursor = conn.cursor()
+		tokenIntegrasi=''
 		if username == 'ghaylan':
 			if not verify_password(password, admin_db["admin"]["hashed_password"]):
 				raise HTTPException(status_code=401, detail='invalid password')
 			else:
-				admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"] )
-				return admin
+				url = 'http://127.0.0.1:3000/token'
+		
+				headers = {
+                    'accept': 'application/json',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+				data = {
+                    'grant_type': '',
+                    'username': username,
+                    'password': password,
+                    'scope': '',
+                    'client_id': '',
+                    'client_secret': ''
+                }
+				response = requests.post(url, headers=headers, data=data)
+				if response.status_code == 200:
+					result = response.json()
+					tokenIntegrasi = result.get('access_token')
+					admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"], integrasiToken= tokenIntegrasi)
+					return admin
 		cursor.execute("SELECT pass as pword FROM akun where username = '%s'" %(username))
 		for row in cursor.fetchall():
 			rows.append(f"{row.pword}")
@@ -129,9 +161,26 @@ def authenticate_user(username:str,password:str):
 			cursor.execute("SELECT pasienID FROM akun where username = '%s'" %(username))
 			for row in cursor.fetchall():
 				idpasien.append(f"{row.pasienID}")
-			user = User(name=username, password_hashed=hashed_password, patientId=idpasien[0],role="pasien")
-			idpasien=[]
-			return user 
+				url = 'http://127.0.0.1:3000/token'
+				headers = {
+					'accept': 'application/json',
+					'Content-Type': 'application/x-www-form-urlencoded'
+				}
+				data = {
+					'grant_type': '',
+					'username': username,
+					'password': password,
+					'scope': '',
+					'client_id': '',
+					'client_secret': ''
+				}
+				response = requests.post(url, headers=headers, data=data)
+				if response.status_code == 200:
+					result = response.json()
+					tokenIntegrasi = result.get('access_token')
+					user = User(name = username, password_hashed=hashed_password, patientId=idpasien[0],role='pasien', integrasiToken=tokenIntegrasi)
+				idpasien=[]
+				return user 
 	else:
 		raise HTTPException(status_code=402, detail="invalid username")
 	
@@ -153,14 +202,78 @@ async def pasien_daftar(nama : str, riwayatPenyakit : str):
 	conn.commit()
 	return "pasien berhasil didaftarkan dengan id = %s" %(rows[0])
 
+@app.get("/emergency", tags=['all can access'])
+async def get_healthcare_phone_number(longitude : float, latitude : float):
+	url='http://127.0.0.1:3000/emergency'
+	headers={
+		'accept':'application/json',
+		'Content-Type':'application/x-www-form-urlencoded'
+	}
+	data={
+		'longitude':longitude,
+		'latitude':latitude
+	}
+	
+	response = requests.get(url,headers=headers,params=data)
+	
+	if response.status_code==200:
+		data=response.json()
+		return data
+	else:
+		return 'gabisa'
+
 @app.post("/users", tags=['all can access'])
-async def create_user(username: str, password: str, patientId):
+async def create_user(username: str, password: str, patientId, phoneNumber:str):
 	if not check_user(username):
 		password_hashed = get_password_hashed(password)
 		conn = get_conn()
 		cursor = conn.cursor()
-		cursor.execute('''INSERT INTO akun VALUES ('%s','%s','%s')''' %(username, password_hashed, patientId))
-		conn.commit()
+		
+		url = 'http://127.0.0.1:3000/register'
+		headers = {
+			'accept': 'application/json',
+			'Content-Type': 'application/json'
+		}
+		data = {
+			
+			"first_name": username,
+			"last_name": username,
+			"email": username +"@gmail.com",
+			"username": username,
+			"password": password,
+			"phone_number": phoneNumber
+		}
+
+		response = requests.post(url, headers=headers, json=data)
+		
+		# Jika berhasil register
+		if response.status_code == 200:
+			url = 'http://127.0.0.1:3000/token'
+			headers = {
+				'accept': 'application/json',
+				'Content-Type': 'application/x-www-form-urlencoded'
+			}
+			data = {
+				'grant_type': '',
+				'username': username,
+				'password': password,
+				'scope': '',
+				'client_id': '',
+				'client_secret': ''
+			}
+
+			response = requests.post(url, headers=headers, data=data)
+
+			if response.status_code == 200:
+				result = response.json()
+				integrasiToken = result.get('access_token')
+				print('Access Token:', integrasiToken)
+				cursor.execute('''INSERT INTO akun VALUES ('%s','%s','%s','%s')''' %(username, password_hashed, patientId, integrasiToken))
+				conn.commit()
+			else:
+				raise HTTPException(status_code=405, detail="username sudah dipakai")
+		else:
+			raise HTTPException(status_code=404, detail="username sudah ")
 		return "user created successfully"
 	else:
 		raise HTTPException(status_code=403, detail="username sudah dipakai")
@@ -374,4 +487,23 @@ async def check_disease(item: Item, user: User = Depends(get_curr_user)):
 	conn.commit()
 	return penyakit
 
-	
+@app.get("/{facility_id}")
+async def get_health_facility_by_id(facility_id: str, user: User = Depends(get_curr_user)):
+	url = f'http://127.0.0.1:3000/healthcare/{facility_id}'
+	headers = {
+		'accept' : 'application/json',
+		'Authorization' : 'bearer '+user.integrasiToken,
+		'Content-Type' : 'application/x-www-form-urlencoded'
+	}
+	data ={
+		'facility_id' : facility_id
+	}
+	response = requests.get(url,headers=headers, params=data)
+	if response.status_code == 200:
+		data=response.json()
+		return data
+	else:
+		raise HTTPException(status_code=405, detail=print(user.integrasiToken))
+
+
+
