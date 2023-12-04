@@ -15,7 +15,8 @@ import json
 import requests
 from requests.auth import HTTPBasicAuth
 from requests_oauthlib import OAuth2Session
-connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+import random
+connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=Mikdar123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
 def get_conn():
    # This connection option is defined by microsoft in msodbcsql.h
     conn = pyodbc.connect(connection_string)
@@ -65,6 +66,13 @@ def verify_password(plain_password, hashed_password):
 
 def get_password_hashed(password):
 	return pwd_context.hash(password)
+
+def gps_get_longitude():
+	result = random.randint(-90, 90)
+	return result
+def gps_get_latitude():
+	result = random.randint(-90, 90)
+	return result
 
 def check_user(username:str):
 	if username == "ghaylan":
@@ -130,7 +138,7 @@ def authenticate_user(username:str,password:str):
 			if not verify_password(password, admin_db["admin"]["hashed_password"]):
 				raise HTTPException(status_code=401, detail='invalid password')
 			else:
-				url = 'http://127.0.0.1:3000/token'
+				url = 'https://hospicall.azurewebsites.net/token'
 		
 				headers = {
                     'accept': 'application/json',
@@ -161,7 +169,7 @@ def authenticate_user(username:str,password:str):
 			cursor.execute("SELECT pasienID FROM akun where username = '%s'" %(username))
 			for row in cursor.fetchall():
 				idpasien.append(f"{row.pasienID}")
-				url = 'http://127.0.0.1:3000/token'
+				url = 'https://hospicall.azurewebsites.net/token'
 				headers = {
 					'accept': 'application/json',
 					'Content-Type': 'application/x-www-form-urlencoded'
@@ -202,9 +210,9 @@ async def pasien_daftar(nama : str, riwayatPenyakit : str):
 	conn.commit()
 	return "pasien berhasil didaftarkan dengan id = %s" %(rows[0])
 
-@app.get("/emergency", tags=['all can access'])
+@app.get("/emergency", tags=['all can access', 'hasil integrasi'])
 async def get_healthcare_phone_number(longitude : float, latitude : float):
-	url='http://127.0.0.1:3000/emergency'
+	url='https://hospicall.azurewebsites.net/emergency'
 	headers={
 		'accept':'application/json',
 		'Content-Type':'application/x-www-form-urlencoded'
@@ -220,7 +228,46 @@ async def get_healthcare_phone_number(longitude : float, latitude : float):
 		data=response.json()
 		return data
 	else:
-		return 'gabisa'
+		return response.text
+	
+@app.get("/healthcare", tags=['all can access', 'hasil integrasi'])
+async def get_all_healthcare_facilites():
+	url='https://hospicall.azurewebsites.net/healthcare'
+	headers={
+		'accept':'application/json',
+		'Content-Type':'application/x-www-form-urlencoded'
+	}
+	
+	response = requests.get(url,headers=headers)
+	
+	if response.status_code==200:
+		data=response.json()
+		return data
+	else:
+		return response.text
+	
+@app.post("/emergency", tags=['all can access', 'hasil integrasi'])
+async def make_call():
+	longitude=gps_get_longitude()
+	latitude = gps_get_latitude()
+	url='https://hospicall.azurewebsites.net/emergency/'
+	headers={
+		'accept':'application/json',
+		'Content-Type':'application/x-www-form-urlencoded'
+	}
+	data ={
+		'longitude':longitude,
+		'latitude':latitude
+	}
+	
+	response = requests.post(url,headers=headers, params=data)
+	
+	if response.status_code==200:
+		data=response.json()
+		return data
+	else:
+		return response.text
+
 
 @app.post("/users", tags=['all can access'])
 async def create_user(username: str, password: str, patientId, phoneNumber:str):
@@ -229,7 +276,7 @@ async def create_user(username: str, password: str, patientId, phoneNumber:str):
 		conn = get_conn()
 		cursor = conn.cursor()
 		
-		url = 'http://127.0.0.1:3000/register'
+		url = 'https://hospicall.azurewebsites.net/register'
 		headers = {
 			'accept': 'application/json',
 			'Content-Type': 'application/json'
@@ -248,7 +295,7 @@ async def create_user(username: str, password: str, patientId, phoneNumber:str):
 		
 		# Jika berhasil register
 		if response.status_code == 200:
-			url = 'http://127.0.0.1:3000/token'
+			url = 'https://hospicall.azurewebsites.net/token'
 			headers = {
 				'accept': 'application/json',
 				'Content-Type': 'application/x-www-form-urlencoded'
@@ -457,7 +504,7 @@ async def update_nama_pasien(nama:str,pasienID: int,user: User = Depends(get_cur
 	else:
 		raise HTTPException(status_code=405, detail="unauthorized")
 
-@app.post('/predict',tags=['pasien access','admin access'])
+@app.post('/predict',tags=['pasien access','admin access', 'hasil integrasi'])
 async def check_disease(item: Item, user: User = Depends(get_curr_user)):
 	dataset1 = pd.read_csv('MOCK_DATA (1).csv')
 	X=dataset1[['TekananDarah', 'TinggiBadan', 'BeratBadan']]
@@ -477,19 +524,64 @@ async def check_disease(item: Item, user: User = Depends(get_curr_user)):
 		penyakit = "darah rendah"
 	else:
 		penyakit= "darah tinggi"
-	conn = get_conn()
-	cursor = conn.cursor()
-	rows=[]
-	cursor.execute('''SELECT ujiID FROM hasilUji ORDER BY ujiID DESC''')
-	for row in cursor.fetchall():
-		rows.append(f"{row.ujiID+1}")
-	cursor.execute('''INSERT INTO hasilUji (ujiID,pasienID,hasilUji) VALUES ('%s','%s','%s')''' %(rows[0],user.patientId,penyakit))
-	conn.commit()
-	return penyakit
+	hasil = penyakit
+	result=[]
+	if hasil == 'sehat':
+		longitude = gps_get_longitude()
+		latitude = gps_get_latitude()
+		url = f'https://hospicall.azurewebsites.net/emergency/'
+		headers = {
+			'accept' : 'application/json',
+			'Content-Type' : 'application/x-www-form-urlencoded'
+		}
+		data ={
+			'longitude' : longitude,
+			'latitude' : latitude
+		}
+		response = requests.get(url,headers=headers, params=data)
+		hasil = response.json()
+		hasil_test_attribute = {"hasil test": {"hasil prediksi":penyakit, "tekanan darah" : item.bloodPressure, "tinggi badan":item.height, "berat badan":item.weight}}
+		hasil.update(hasil_test_attribute)
+		result.append(hasil)
+	else:
+		longitude = gps_get_longitude()
+		latitude = gps_get_latitude()
+		url = 'https://hospicall.azurewebsites.net/emergency/'
+		headers = {
+			'accept' : 'application/json',
+			'Content-Type' : 'application/x-www-form-urlencoded'
+		}
+		data ={
+			'longitude' : longitude,
+			'latitude' : latitude
+		}
+		response = requests.post(url,headers=headers, params=data)
+		
+		hasil = response.json()
+		hasil_test_attribute = {"hasil test": {"hasil prediksi":penyakit, "tekanan darah" : item.bloodPressure, "tinggi badan":item.height, "berat badan":item.weight}}
+		hasil.append(hasil_test_attribute)
+		result.append(hasil)
 
-@app.get("/{facility_id}")
+	if user.role=='admin':
+		return result
+	else:
+		conn = get_conn()
+		cursor = conn.cursor()
+		rows=[]
+		cursor.execute('''SELECT ujiID FROM hasilUji ORDER BY ujiID DESC''')
+		for row in cursor.fetchall():
+			rows.append(f"{row.ujiID+1}")
+		
+		else:
+			id = user.patientId
+		cursor.execute('''INSERT INTO hasilUji (ujiID,pasienID,hasilUji) VALUES ('%s','%s','%s')''' %(rows[0],id,penyakit))
+		conn.commit()
+		return result
+	
+
+@app.get("/{facility_id}", tags = ['hasil integrasi'])
 async def get_health_facility_by_id(facility_id: str, user: User = Depends(get_curr_user)):
-	url = f'http://127.0.0.1:3000/healthcare/{facility_id}'
+	url = f'https://hospicall.azurewebsites.net/healthcare/{facility_id}'
 	headers = {
 		'accept' : 'application/json',
 		'Authorization' : 'bearer '+user.integrasiToken,
