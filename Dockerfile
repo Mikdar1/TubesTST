@@ -14,5 +14,5 @@ RUN curl https://packages.microsoft.com/config/debian/11/prod.list  \
 RUN exit
 RUN apt-get -y update
 RUN ACCEPT_EULA=Y apt-get install -y msodbcsql18
-RUN pip install scikit-learn numpy fastapi uvicorn pandas matplotlib pyodbc python-multipart python-jose[cryptography] passlib[bcrypt]
+RUN pip install scikit-learn numpy fastapi uvicorn pandas matplotlib pyodbc python-multipart python-jose[cryptography] passlib[bcrypt] requests requests_oauthlib
 CMD ["uvicorn", "healthcare:app", "--host=0.0.0.0", "--port=80"]

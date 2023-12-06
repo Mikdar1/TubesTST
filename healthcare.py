@@ -16,6 +16,8 @@ import requests
 from requests.auth import HTTPBasicAuth
 from requests_oauthlib import OAuth2Session
 import random
+from fastapi.middleware.cors import CORSMiddleware
+
 connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:healthcareghaylan.database.windows.net,1433;Database=healthcare;Uid=sqladmin;Pwd=Mikdar123;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
 def get_conn():
    # This connection option is defined by microsoft in msodbcsql.h
@@ -59,6 +61,17 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated=["auto"])
 
 
 app = FastAPI()
+origins = [
+    "*"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 oauth_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def verify_password(plain_password, hashed_password):
