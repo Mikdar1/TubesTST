@@ -171,6 +171,8 @@ def authenticate_user(username:str,password:str):
 					tokenIntegrasi = result.get('access_token')
 					admin = User(name = admin_db["admin"]["username"],password_hashed=admin_db["admin"]["hashed_password"],patientId=admin_db["admin"]["patientID"],role=admin_db["admin"]["role"], integrasiToken= tokenIntegrasi)
 					return admin
+				else:
+					return response.text
 		cursor.execute("SELECT pass as pword FROM akun where username = '%s'" %(username))
 		for row in cursor.fetchall():
 			rows.append(f"{row.pword}")
@@ -243,11 +245,12 @@ async def get_healthcare_phone_number(longitude : float, latitude : float):
 	else:
 		return response.text
 	
-@app.get("/healthcare", tags=['all can access', 'hasil integrasi'])
-async def get_all_healthcare_facilites():
-	url='https://hospicall.azurewebsites.net/healthcare'
+@app.get("/healthcare", tags=['pasien access', 'admin access', 'hasil integrasi'])
+async def get_all_healthcare_facilites(user: User = Depends(get_curr_user)):
+	url='https://hospicall.azurewebsites.net/healthcare/all_facilities'
 	headers={
 		'accept':'application/json',
+		'Authorization' : 'bearer '+user.integrasiToken,
 		'Content-Type':'application/x-www-form-urlencoded'
 	}
 	
@@ -331,7 +334,7 @@ async def create_user(username: str, password: str, patientId, phoneNumber:str):
 				cursor.execute('''INSERT INTO akun VALUES ('%s','%s','%s','%s')''' %(username, password_hashed, patientId, integrasiToken))
 				conn.commit()
 			else:
-				raise HTTPException(status_code=405, detail="username sudah dipakai")
+				raise HTTPException(status_code=405, detail=response.text)
 		else:
 			raise HTTPException(status_code=404, detail="username sudah ")
 		return "user created successfully"
